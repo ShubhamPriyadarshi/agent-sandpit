@@ -292,8 +292,7 @@ class ChessGUI:
 
                     self.canvas.create_text(
                         x, y, text=symbol, font=("Arial", 36),
-                        fill=color, tags="pieces",
-                        stroke=outline, width=2
+                        fill=color, tags="pieces"
                     )
 
     def _highlight_last_move(self) -> None:
