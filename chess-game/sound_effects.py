@@ -1,44 +1,24 @@
 """
-Sound Effects Module - Generates chess game sounds using the webbrowser audio API.
-Provides simple beeps and tones for move, capture, check, and game events.
+Sound Effects Module - Generates chess game sounds.
+Tries pygame first, falls back to simple oscillator if unavailable.
 """
 
 import threading
 import struct
 import math
-import os
-
-try:
-    import pygame
-    _HAS_PYGAME = True
-except ImportError:
-    _HAS_PYGAME = False
-
-
-def _init_pygame():
-    """Initialize pygame mixer for sound playback."""
-    if _HAS_PYGAME:
-        try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-            return True
-        except Exception:
-            return False
-    return False
+import array
 
 
 def _generate_tone(frequency: float, duration: float, volume: float = 0.3,
                    sample_rate: int = 44100) -> bytes:
-    """Generate a simple tone as WAV bytes."""
+    """Generate a simple tone as signed 16-bit PCM bytes."""
     num_samples = int(sample_rate * duration)
-    samples = []
-
+    buf = array.array('h', [0] * num_samples)
     for i in range(num_samples):
         t = i / sample_rate
-        amplitude = int(volume * 32767 * math.sin(2 * math.pi * frequency * t))
-        amplitude = max(-32768, min(32767, amplitude))
-        samples.append(struct.pack('<h', amplitude))
-
-    return b''.join(samples)
+        amp = int(volume * 32767 * math.sin(2 * math.pi * frequency * t))
+        buf[i] = max(-32768, min(32767, amp))
+    return buf.tobytes()
 
 
 def _generate_chess_sound(sound_type: str = "move") -> bytes:
@@ -60,54 +40,73 @@ def _generate_chess_sound(sound_type: str = "move") -> bytes:
     return result
 
 
+def _play_with_pygame(sound_bytes: bytes):
+    """Attempt to play sound via pygame.mixer."""
+    try:
+        import pygame.mixer
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        import io
+        wave_file = io.BytesIO(sound_bytes)
+        sound = pygame.mixer.Sound(stream=wave_file)
+        sound.play()
+        return True
+    except Exception:
+        return False
+
+
+def _play_oscillator(sound_bytes: bytes):
+    """Fallback: play via a simple subprocess oscilloscope."""
+    try:
+        import subprocess
+        import tempfile
+        import os
+        # Write raw PCM to a temp file and play with aplay
+        with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
+            f.write(sound_bytes)
+            path = f.name
+        subprocess.Popen(
+            ["aplay", "-f", "S16_LE", "-r", "44100", "-c", "1", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        os.unlink(path)
+        return True
+    except Exception:
+        return False
+
+
 class SoundManager:
     """Manages chess game sound effects."""
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
-        self._pygame_initialized = False
-        self._use_pygame = False
+        self._play_method = None
+        self._try_init()
 
-        if _HAS_PYGAME:
-            self._pygame_initialized = _init_pygame()
-            self._use_pygame = self._pygame_initialized
+    def _try_init(self):
+        """Try to find a working sound playback method."""
+        sound = _generate_chess_sound()
+        if _play_with_pygame(sound):
+            self._play_method = _play_with_pygame
+        elif _play_oscillator(sound):
+            self._play_method = _play_oscillator
+        else:
+            self.enabled = False
 
     def play_sound(self, sound_type: str = "move"):
         """Play a chess-related sound effect."""
-        if not self.enabled:
+        if not self.enabled or self._play_method is None:
             return
-
-        def _play():
-            if self._use_pygame and self._pygame_initialized:
-                try:
-                    wav_data = _generate_chess_sound(sound_type)
-                    # Create a Sound object from the WAV data
-                    import io
-                    # Create minimal WAV header
-                    wav_header = struct.pack('<4sl4s',
-                                             b'RIFF', 36 + len(wav_data),
-                                             b'WAVE', b'fmt ')
-                    fmt_chunk = struct.pack('<HHLLHH', 1, 1, 44100, 44100 * 2, 2, 16)
-                    data_chunk = struct.pack('<4sl', b'data', len(wav_data))
-                    wav_bytes = wav_header + fmt_chunk + data_chunk + wav_data
-
-                    import io
-                    wave_file = io.BytesIO(wav_bytes)
-
-                    import pygame.mixer
-                    sound = pygame.mixer.Sound(stream=wave_file)
-                    sound.play()
-                except Exception:
-                    pass
-            else:
-                # Fallback: silent mode - sounds are optional
-                pass
-
-        if self.enabled:
-            threading.Thread(target=_play, daemon=True).start()
+        try:
+            sound_bytes = _generate_chess_sound(sound_type)
+            self._play_method(sound_bytes)
+        except Exception:
+            pass
 
     def enable(self):
         self.enabled = True
+        self._try_init()
 
     def disable(self):
         self.enabled = False
