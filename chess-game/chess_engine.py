@@ -83,6 +83,19 @@ class Move:
         self.is_castling = is_castling
         self.promotion_piece = promotion_piece
 
+    def __eq__(self, other):
+        if not isinstance(other, Move):
+            return False
+        return (self.from_pos == other.from_pos and
+                self.to_pos == other.to_pos and
+                self.is_en_passant == other.is_en_passant and
+                self.is_castling == other.is_castling and
+                self.promotion_piece == other.promotion_piece)
+
+    def __hash__(self):
+        return hash((self.from_pos, self.to_pos, self.is_en_passant,
+                     self.is_castling, self.promotion_piece))
+
     def to_algebraic(self, board: 'ChessBoard') -> str:
         files = "abcdefgh"
         ranks = "87654321"
