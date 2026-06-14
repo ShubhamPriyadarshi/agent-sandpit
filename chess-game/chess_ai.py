@@ -362,12 +362,9 @@ class _QuickBoard:
         """Undo a move."""
         self.turn = -self.turn
 
-        if "promo" in special:
-            self.sq[to] = prev_piece  # pawn
-        else:
-            self.sq[to] = prev_piece
-
-        self.sq[fr] = 0
+        # Restore piece to its original square, clear destination
+        self.sq[to] = 0
+        self.sq[fr] = prev_piece
 
         if "ep" in special:
             pawn_row = (fr // 8) - 1 if self.turn == 1 else (fr // 8) + 1
@@ -393,6 +390,7 @@ class _QuickBoard:
         return self._evaluate()
 
     def _evaluate(self) -> float:
+        """Always evaluate from white's perspective. Positive = good for white."""
         score = 0.0
         ptype_map = {1: PieceType.PAWN, 2: PieceType.KNIGHT, 3: PieceType.BISHOP,
                      4: PieceType.ROOK, 5: PieceType.QUEEN, 6: PieceType.KING}
@@ -405,7 +403,6 @@ class _QuickBoard:
             pt = ptype_map.get(abs_code, PieceType.PAWN)
             material = self.PIECE_VALUES[pt]
             pst = self.PST.get(pt, (0,) * 64)
-            # PST is oriented for white; flip for black
             if sign == 1:
                 score += material + pst[idx]
             else:
@@ -421,6 +418,9 @@ class ChessAI:
         self.difficulty = difficulty
         self.nodes_searched = 0
         self.time_limit = {1: 0.5, 2: 1.5, 3: 3.0, 4: 5.0}.get(difficulty, 3.0)
+        # Evaluation is always from white's perspective.
+        # AI maximizes when white, minimizes when black.
+        self._maximizing = (color == PieceColor.WHITE)
 
     def get_best_move(self, board: ChessBoard) -> Optional[Move]:
         qboard = _QuickBoard(board)
@@ -435,7 +435,7 @@ class ChessAI:
         moves.sort(key=lambda m: m[2], reverse=True)
 
         best_move = moves[0]
-        best_eval = float('-inf')
+        best_eval = float('-inf') if self._maximizing else float('inf')
         alpha = float('-inf')
         beta = float('inf')
         depth = min(self.difficulty, 4)
@@ -448,14 +448,13 @@ class ChessAI:
             if time.time() - start_time > self.time_limit * 0.8:
                 break
             best_eval, best_move = self._iter_deep(qboard, d, alpha, beta, best_move)
-            alpha = max(alpha, best_eval)
+            alpha = max(alpha, best_eval) if self._maximizing else min(alpha, best_eval)
 
         return self._map_move(board, best_move)
 
     def _iter_deep(self, qboard: _QuickBoard, depth: int,
                    alpha: float, beta: float, best_move: tuple) -> tuple:
-        result = self._search(qboard, depth, alpha, beta, True, best_move)
-        return result[0], result[1]
+        return self._search(qboard, depth, alpha, beta, self._maximizing, best_move)
 
     def _search(self, qboard: _QuickBoard, depth: int,
                 alpha: float, beta: float, maximizing: bool,
@@ -469,8 +468,13 @@ class ChessAI:
         for fr, to, cap, spec in moves:
             piece = qboard.sq[fr]
             qboard._make(fr, to, cap, spec)
-            in_check = qboard.is_in_check(
-                PieceColor.WHITE if piece > 0 else PieceColor.BLACK)
+            # After _make, self.turn has flipped.
+            # Directly check if the moving side's king is attacked by the opponent.
+            moving_side = PieceColor.BLACK if piece < 0 else PieceColor.WHITE
+            attacker = PieceColor.WHITE if piece < 0 else PieceColor.BLACK
+            king_pos = qboard.find_king(moving_side)
+            in_check = king_pos != -1 and qboard._is_attacked_by(
+                king_pos, 1 if attacker == PieceColor.WHITE else -1)
             qboard._unmake(fr, to, cap, spec, piece)
             if not in_check:
                 legal.append((fr, to, cap, spec))
